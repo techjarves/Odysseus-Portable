@@ -60,35 +60,54 @@ export async function selectAndPrepareModel(modelsDir) {
     fs.mkdirSync(modelsDir, { recursive: true });
   }
 
-  // Scan local models folder for existing GGUF files
-  const localGgufs = fs.readdirSync(modelsDir)
-    .filter(file => file.toLowerCase().endsWith('.gguf'));
+  const scanLocalGgufs = (dir, baseDir = dir) => {
+    const found = [];
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        found.push(...scanLocalGgufs(fullPath, baseDir));
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.gguf')) {
+        found.push({
+          file: entry.name,
+          relPath: path.relative(baseDir, fullPath),
+          path: fullPath
+        });
+      }
+    }
+    return found;
+  };
+
+  // Scan local models folder recursively. The webapp downloads HuggingFace repos
+  // into per-model subfolders, while manual drag/drop models may be top-level.
+  const localGgufs = scanLocalGgufs(modelsDir);
 
   const options = [];
 
   // Add local models first
-  localGgufs.forEach(file => {
-    const stats = fs.statSync(path.join(modelsDir, file));
+  localGgufs.forEach(model => {
+    const stats = fs.statSync(model.path);
     const sizeGB = (stats.size / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    const displayName = model.relPath === model.file ? model.file : model.relPath.replace(/\\/g, '/');
     options.push({
       type: 'local',
-      name: `Local Model: ${file}`,
-      file: file,
+      name: `Local Model: ${displayName}`,
+      file: model.file,
       sizeGB: sizeGB,
-      path: path.join(modelsDir, file)
+      path: model.path
     });
   });
 
   // Add predefined download models
   PREDEFINED_MODELS.forEach(m => {
-    const isDownloaded = localGgufs.some(localFile => localFile.toLowerCase() === m.file.toLowerCase());
+    const downloadedModel = localGgufs.find(localModel => localModel.file.toLowerCase() === m.file.toLowerCase());
     options.push({
       type: 'download',
-      name: `Download: ${m.name} [HF: ${m.repo}] ${isDownloaded ? '(Already Downloaded)' : ''}`,
+      name: `Download: ${m.name} [HF: ${m.repo}] ${downloadedModel ? '(Already Downloaded)' : ''}`,
       file: m.file,
       sizeGB: m.sizeGB,
       url: m.url,
-      repo: m.repo
+      repo: m.repo,
+      path: downloadedModel?.path
     });
   });
 
@@ -135,7 +154,7 @@ export async function selectAndPrepareModel(modelsDir) {
   }
 
   // Handle download selection
-  const modelPath = path.join(modelsDir, selection.file);
+  const modelPath = selection.path || path.join(modelsDir, selection.file);
   if (fs.existsSync(modelPath)) {
     console.log(`\nSelected model '${selection.file}' already exists in models folder.`);
     selection.path = modelPath;

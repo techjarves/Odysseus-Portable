@@ -75,8 +75,117 @@ function patchCookbookHelpers(odysseusDir) {
           console.warn('[Odysseus Warning] Could not find target path export statement in cookbook_helpers.py to patch.');
         }
       }
+      const localDirTarget = '_LOCAL_DIR_RE = re.compile(r"^~?/[A-Za-z0-9._/-]*$|^~$")';
+      const localDirReplacement = '_LOCAL_DIR_RE = re.compile(r"^~?/[A-Za-z0-9._/-]*$|^~$|^[A-Za-z]:[\\\\/][A-Za-z0-9._/\\\\\\\\-]*$")';
+      if (content.includes(localDirTarget)) {
+        console.log('[Odysseus] Patching cookbook_helpers.py for Windows download directories...');
+        content = content.replace(localDirTarget, localDirReplacement);
+        content = content.replace(
+          '    v = v.rstrip("/") or "/"',
+          '    v = v.replace("\\\\\\\\", "/")\n    v = v.rstrip("/") or "/"'
+        );
+        content = content.replace(
+          'Invalid local_dir — must be an absolute or ~ path with no spaces or shell metacharacters',
+          'Invalid local_dir — must be an absolute, Windows drive, or ~ path with no spaces or shell metacharacters'
+        );
+        fs.writeFileSync(helpersPath, content, 'utf8');
+        console.log('[Odysseus] Windows download directory support successfully patched.');
+      }
     } catch (err) {
       console.warn('[Odysseus Warning] Failed to patch cookbook_helpers.py:', err.message);
+    }
+  }
+}
+
+// Self-healing patch for Cookbook downloads to pick up existing HF credentials
+// and avoid mojibake in Windows logs.
+function patchCookbookRoutes(odysseusDir) {
+  const routesPath = path.join(odysseusDir, 'routes', 'cookbook_routes.py');
+  if (fs.existsSync(routesPath)) {
+    try {
+      let content = fs.readFileSync(routesPath, 'utf8');
+      let changed = false;
+      const badTokenMessage = 'echo "[odysseus] HF token: NOT SET — gated/private models will be denied. ';
+      if (content.includes(badTokenMessage)) {
+        content = content.replace(
+          badTokenMessage,
+          'echo "[odysseus] HF token: NOT SET - gated/private models will be denied. '
+        );
+        changed = true;
+      }
+      if (!content.includes('HUGGING_FACE_HUB_TOKEN') && content.includes('def _load_stored_hf_token() -> str:')) {
+        console.log('[Odysseus] Patching Cookbook HF token fallback support...');
+        const target = `    def _load_stored_hf_token() -> str:
+        if not _cookbook_state_path.exists():
+            return ""
+        try:
+            state = json.loads(_cookbook_state_path.read_text(encoding="utf-8"))
+            env = state.get("env") if isinstance(state, dict) else {}
+            return _decrypt_secret(env.get("hfToken") if isinstance(env, dict) else "")
+        except Exception:
+            return ""
+`;
+        const replacement = `    def _load_stored_hf_token() -> str:
+        try:
+            if _cookbook_state_path.exists():
+                state = json.loads(_cookbook_state_path.read_text(encoding="utf-8"))
+                env = state.get("env") if isinstance(state, dict) else {}
+                token = _decrypt_secret(env.get("hfToken") if isinstance(env, dict) else "")
+                if token:
+                    return token
+        except Exception:
+            pass
+        for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+            token = (os.environ.get(key) or "").strip()
+            if token:
+                return token
+        for token_path in (
+            Path.home() / ".cache" / "huggingface" / "token",
+            Path.home() / ".huggingface" / "token",
+        ):
+            try:
+                token = token_path.read_text(encoding="utf-8").strip()
+                if token:
+                    return token
+            except Exception:
+                pass
+        return ""
+`;
+        if (content.includes(target)) {
+          content = content.replace(target, replacement);
+          changed = true;
+        } else {
+          console.warn('[Odysseus Warning] Could not find target HF token loader to patch.');
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(routesPath, content, 'utf8');
+        console.log('[Odysseus] Cookbook HF token handling successfully patched.');
+      }
+    } catch (err) {
+      console.warn('[Odysseus Warning] Failed to patch Cookbook HF token handling:', err.message);
+    }
+  }
+}
+
+// Self-healing patch for Cookbook frontend state normalization.
+// Odysseus upstream prepends the default HuggingFace cache to modelDirs; this
+// portable bundle uses the root /models folder as the canonical local cache.
+function patchCookbookStateNormalizer(odysseusDir) {
+  const runningPath = path.join(odysseusDir, 'static', 'js', 'cookbookRunning.js');
+  if (fs.existsSync(runningPath)) {
+    try {
+      let content = fs.readFileSync(runningPath, 'utf8');
+      const target = "      if (!dirs.includes('~/.cache/huggingface/hub')) dirs.unshift('~/.cache/huggingface/hub');";
+      const replacement = "      if (!dirs.length) dirs.push('~/.cache/huggingface/hub');";
+      if (content.includes(target)) {
+        console.log('[Odysseus] Patching Cookbook modelDirs normalization for portable models folder...');
+        content = content.replace(target, replacement);
+        fs.writeFileSync(runningPath, content, 'utf8');
+        console.log('[Odysseus] Cookbook modelDirs normalization successfully patched.');
+      }
+    } catch (err) {
+      console.warn('[Odysseus Warning] Failed to patch Cookbook modelDirs normalization:', err.message);
     }
   }
 }
@@ -106,10 +215,9 @@ function configureCookbookState(odysseusDir, projectRoot) {
           env: "none",
           envPath: "",
           modelDirs: [
-            "~/.cache/huggingface/hub",
             modelsDirPosix
           ],
-          modelDir: "~/.cache/huggingface/hub",
+          modelDir: modelsDirPosix,
           downloadDir: modelsDirPosix,
           platform: "windows"
         }
@@ -137,9 +245,9 @@ function configureCookbookState(odysseusDir, projectRoot) {
               port: "",
               env: "none",
               envPath: "",
-              modelDirs: ["~/.cache/huggingface/hub"],
-              modelDir: "~/.cache/huggingface/hub",
-              downloadDir: "",
+              modelDirs: [modelsDirPosix],
+              modelDir: modelsDirPosix,
+              downloadDir: modelsDirPosix,
               platform: "windows"
             }
           ];
@@ -148,12 +256,8 @@ function configureCookbookState(odysseusDir, projectRoot) {
         const localServer = state.env.servers.find(s => s.name === "Local") || state.env.servers[0];
         if (localServer) {
           localServer.downloadDir = modelsDirPosix;
-          if (!localServer.modelDirs) {
-            localServer.modelDirs = ["~/.cache/huggingface/hub"];
-          }
-          if (!localServer.modelDirs.includes(modelsDirPosix)) {
-            localServer.modelDirs.push(modelsDirPosix);
-          }
+          localServer.modelDirs = [modelsDirPosix];
+          localServer.modelDir = modelsDirPosix;
         }
       }
     } catch (err) {
@@ -388,6 +492,8 @@ async function main() {
   
   ensureOdysseusCloned(odysseusDir);
   patchCookbookHelpers(odysseusDir);
+  patchCookbookRoutes(odysseusDir);
+  patchCookbookStateNormalizer(odysseusDir);
 
   // Step 2: Establish Python Environment
   let pythonExe;
@@ -490,12 +596,19 @@ import json
 
 sys.path.insert(0, ".")
 from core.database import SessionLocal, ModelEndpoint
+from core.database import Session as ChatSession
 
 db = SessionLocal()
 try:
-    url = "http://localhost:8080/v1"
+    url = "http://127.0.0.1:8080/v1"
     model_name = "${modelSelection.file}"
-    existing = db.query(ModelEndpoint).filter(ModelEndpoint.base_url == url).first()
+    old_url = "http://localhost:8080/v1"
+    old_chat_url = old_url + "/chat/completions"
+    new_chat_url = url + "/chat/completions"
+    existing = (
+        db.query(ModelEndpoint).filter(ModelEndpoint.base_url == url).first()
+        or db.query(ModelEndpoint).filter(ModelEndpoint.base_url == old_url).first()
+    )
     if not existing:
         new_ep = ModelEndpoint(
             id=str(uuid.uuid4()),
@@ -512,11 +625,19 @@ try:
         db.commit()
         print(f"  [ok] Registered Odysseus Portable LLM endpoint successfully with: {model_name}")
     else:
+        existing.base_url = url
         existing.is_enabled = True
         existing.supports_tools = True
         existing.cached_models = json.dumps([model_name])
-        db.commit()
         print(f"  [ok] Odysseus Portable LLM endpoint verified and cached model set to: {model_name}")
+    migrated = (
+        db.query(ChatSession)
+        .filter(ChatSession.endpoint_url == old_chat_url)
+        .update({ChatSession.endpoint_url: new_chat_url}, synchronize_session=False)
+    )
+    db.commit()
+    if migrated:
+        print(f"  [ok] Migrated {migrated} chat session(s) to 127.0.0.1 proxy URL")
 except Exception as e:
     print(f"Error seeding database: {e}")
     db.rollback()
