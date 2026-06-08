@@ -15,6 +15,7 @@ $zipPath = Join-Path $tmp $zipName
 New-Item -ItemType Directory -Force -Path $tmp, $NodeDir | Out-Null
 
 Write-Host "[Bootstrap] Downloading Node.js $Version ($arch)..."
+Add-Type -AssemblyName System.Net.Http
 $client = [System.Net.Http.HttpClient]::new()
 $response = $client.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
 $response.EnsureSuccessStatusCode() | Out-Null

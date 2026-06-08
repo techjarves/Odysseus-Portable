@@ -102,10 +102,15 @@ export function extractArchive(archivePath, destDir) {
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
-      archivePath,
-      destDir
-    ], { stdio: 'inherit' });
+      'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
+    ], {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        ARCHIVE_PATH: archivePath,
+        DEST_DIR: destDir
+      }
+    });
   } else if (archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
     execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit' });
   } else if (archivePath.endsWith('.tar.xz')) {
