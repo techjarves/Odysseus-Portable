@@ -91,8 +91,8 @@ export async function ensurePortableGit(binDir) {
   }
 
   // Git has no official tiny portable binary for Linux/macOS comparable to
-  // PortableGit. Keep host Git opt-in so a fresh machine does not need it.
-  if (process.env.ODYSSEUS_ALLOW_SYSTEM_GIT === '1' && commandWorks('git')) {
+  // PortableGit. Fall back to the host Git if it is installed and working.
+  if ((process.env.ODYSSEUS_ALLOW_SYSTEM_GIT === '1' || commandWorks('git'))) {
     return { gitExe: 'git', env: process.env, portable: false };
   }
   return { gitExe: '', env: process.env, portable: false };
