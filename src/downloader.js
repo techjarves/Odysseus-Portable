@@ -97,20 +97,30 @@ export function extractArchive(archivePath, destDir) {
   const isWindows = process.platform === 'win32';
   
   if (isWindows && ext === '.zip') {
-    execFileSync('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
-    ], {
-      stdio: 'inherit',
-      env: {
-        ...process.env,
-        ARCHIVE_PATH: archivePath,
-        DEST_DIR: destDir
+    try {
+      execFileSync('tar.exe', ['-m', '-xf', archivePath, '-C', destDir], { stdio: 'inherit' });
+    } catch (tarErr) {
+      console.warn(`[Extract Warning] tar.exe could not extract ${path.basename(archivePath)}. Falling back to Expand-Archive.`);
+      try {
+        execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
+        ], {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            ARCHIVE_PATH: archivePath,
+            DEST_DIR: destDir
+          }
+        });
+      } catch (powershellErr) {
+        powershellErr.message = `Failed to extract ${path.basename(archivePath)} with tar.exe or Expand-Archive. ${powershellErr.message}`;
+        throw powershellErr;
       }
-    });
+    }
   } else if (archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
     execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit' });
   } else if (archivePath.endsWith('.tar.xz')) {

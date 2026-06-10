@@ -52,6 +52,19 @@ function portableGitEnv(binDir) {
   };
 }
 
+function findWindowsGitAsset(release) {
+  return release.assets.find(a => /MinGit-.*-64-bit\.zip$/i.test(a.name))
+    || release.assets.find(a => /MinGit-.*\.zip$/i.test(a.name))
+    || release.assets.find(a => /PortableGit-.*-64-bit\.7z\.exe$/i.test(a.name))
+    || release.assets.find(a => /PortableGit-.*\.7z\.exe$/i.test(a.name));
+}
+
+function describeSpawnFailure(result) {
+  if (result.error) return result.error.message;
+  if (result.signal) return `terminated by signal ${result.signal}`;
+  return `exit code ${result.status}`;
+}
+
 async function ensureWindowsPortableGit(binDir) {
   const existing = findPortableGit(binDir);
   if (existing) return { gitExe: existing, env: portableGitEnv(binDir), portable: true };
@@ -60,20 +73,26 @@ async function ensureWindowsPortableGit(binDir) {
   fs.mkdirSync(gitDir, { recursive: true });
   console.log('[Git] Portable Git not found. Downloading Git for Windows PortableGit...');
   const release = await fetchJSON(GIT_FOR_WINDOWS_RELEASE_API);
-  const asset = release.assets.find(a => /PortableGit-.*-64-bit\.7z\.exe$/i.test(a.name))
-    || release.assets.find(a => /PortableGit-.*\.7z\.exe$/i.test(a.name));
+  const asset = findWindowsGitAsset(release);
   if (!asset) {
-    throw new Error(`Could not find a PortableGit asset in ${release.tag_name || 'latest Git for Windows release'}.`);
+    throw new Error(`Could not find a MinGit or PortableGit asset in ${release.tag_name || 'latest Git for Windows release'}.`);
   }
   const archivePath = path.join(binDir, asset.name);
   await downloadFile(asset.browser_download_url, archivePath, (downloaded, total) => {
     printProgressBar(downloaded, total, 'Downloading PortableGit: ');
   });
   console.log('[Git] Extracting PortableGit...');
-  const result = spawnSync(archivePath, [`-o${gitDir}`, '-y'], { stdio: 'inherit' });
-  fs.rmSync(archivePath, { force: true });
-  if (result.status !== 0) {
-    throw new Error(`PortableGit extractor failed with exit code ${result.status}.`);
+  try {
+    if (/\.zip$/i.test(asset.name)) {
+      extractArchive(archivePath, gitDir);
+    } else {
+      const result = spawnSync(archivePath, [`-o${gitDir}`, '-y'], { stdio: 'inherit' });
+      if (result.status !== 0) {
+        throw new Error(`PortableGit extractor failed: ${describeSpawnFailure(result)}.`);
+      }
+    }
+  } finally {
+    fs.rmSync(archivePath, { force: true });
   }
   const gitExe = findPortableGit(binDir);
   if (!gitExe) {
