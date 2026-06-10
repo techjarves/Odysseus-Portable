@@ -53,6 +53,8 @@ export function detectHardware() {
   // GPU Detection
   let gpuBackend = 'cpu';
   let gpuName = 'None';
+  let gpuMemoryGB = 0;
+  let gpuFreeMemoryGB = 0;
 
   // 1. Metal support on Apple Silicon macOS (ARM64)
   if (detectedOS === 'macos' && arch === 'arm64') {
@@ -61,10 +63,16 @@ export function detectHardware() {
   } else {
     // 2. NVIDIA CUDA detection
     // Try to run nvidia-smi
-    const nvidiaSmi = runCmd('nvidia-smi --query-gpu=name --format=csv,noheader');
+    const nvidiaSmi = runCmd('nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader,nounits');
     if (nvidiaSmi) {
       gpuBackend = 'cuda';
-      gpuName = nvidiaSmi.split('\n')[0].trim();
+      const firstGpu = nvidiaSmi.split('\n')[0].trim();
+      const parts = firstGpu.split(',').map(p => p.trim());
+      gpuName = parts[0] || 'NVIDIA GPU';
+      const totalMiB = parseInt(parts[1] || '0', 10);
+      const freeMiB = parseInt(parts[2] || '0', 10);
+      if (!isNaN(totalMiB) && totalMiB > 0) gpuMemoryGB = +(totalMiB / 1024).toFixed(1);
+      if (!isNaN(freeMiB) && freeMiB > 0) gpuFreeMemoryGB = +(freeMiB / 1024).toFixed(1);
     } else {
       // 3. Vulkan detection (highly portable across AMD/Intel/NVIDIA)
       let hasVulkan = false;
@@ -90,7 +98,7 @@ export function detectHardware() {
         }
       }
 
-      if (hasVulkan) {
+  if (hasVulkan) {
         gpuBackend = 'vulkan';
         gpuName = 'Vulkan Compatible GPU';
         
@@ -113,6 +121,8 @@ export function detectHardware() {
     cpuCores,
     cpuModel,
     gpuBackend,
-    gpuName
+    gpuName,
+    gpuMemoryGB,
+    gpuFreeMemoryGB
   };
 }

@@ -3,7 +3,6 @@ bin/
 
 # GGUF Model Files (Gigabytes in size, fetched on-demand)
 models/*
-!models/.gitkeep
 
 # Odysseus source code directory (Cloned & pulled dynamically via Git at runtime)
 odysseus/
@@ -12,6 +11,11 @@ odysseus/
 logs/
 *.log
 chrome_error.log
+
+# Local launcher state
+data/launcher_config.json
+data/runtime.json
+data/bootstrap/
 
 # Headless Browser Debugging Profile
 chrome-debug-profile/

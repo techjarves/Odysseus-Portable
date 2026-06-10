@@ -2,7 +2,7 @@ import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { URL } from 'url';
 
 // Fetch JSON helper
@@ -97,15 +97,30 @@ export function extractArchive(archivePath, destDir) {
   const isWindows = process.platform === 'win32';
   
   if (isWindows && ext === '.zip') {
-    const escapedArchive = archivePath.replace(/'/g, "''");
-    const escapedDest = destDir.replace(/'/g, "''");
-    execSync(`powershell -Command "Expand-Archive -LiteralPath '${escapedArchive}' -DestinationPath '${escapedDest}' -Force"`, { stdio: 'inherit' });
-  } else if (ext === '.gz' || archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
-    execSync(`tar -xzf "${archivePath}" -C "${destDir}"`, { stdio: 'inherit' });
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
+    ], {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        ARCHIVE_PATH: archivePath,
+        DEST_DIR: destDir
+      }
+    });
+  } else if (archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
+    execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit' });
+  } else if (archivePath.endsWith('.tar.xz')) {
+    execFileSync('tar', ['-xJf', archivePath, '-C', destDir], { stdio: 'inherit' });
+  } else if (archivePath.endsWith('.tar.zst')) {
+    execFileSync('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' });
   } else if (ext === '.zip') {
-    execSync(`unzip -o "${archivePath}" -d "${destDir}"`, { stdio: 'inherit' });
+    execFileSync('unzip', ['-o', archivePath, '-d', destDir], { stdio: 'inherit' });
   } else {
-    throw new Error(`Unsupported archive format for extraction: ${ext}`);
+    throw new Error(`Unsupported archive format for extraction: ${path.basename(archivePath)}`);
   }
 }
 
@@ -116,7 +131,7 @@ export function printProgressBar(downloaded, total, prefix = "Downloading: ") {
   const currentMB = (downloaded / (1024 * 1024)).toFixed(1);
   const barLength = 30;
   const progress = Math.min(barLength, Math.round((downloaded / total) * barLength));
-  const bar = "█".repeat(progress) + "░".repeat(barLength - progress);
+  const bar = "#".repeat(progress) + "-".repeat(barLength - progress);
   process.stdout.write(`\r${prefix}[${bar}] ${percent}% (${currentMB}/${totalMB} MB)`);
   if (downloaded >= total) {
     process.stdout.write("\n");
@@ -125,7 +140,10 @@ export function printProgressBar(downloaded, total, prefix = "Downloading: ") {
 
 // Fetch the best matching llama.cpp asset
 export async function getLlamaCppAssets(hw) {
-  const apiURL = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+  let apiURL = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+  if (hw.os === 'linux' && hw.gpuBackend === 'cuda') {
+    apiURL = "https://api.github.com/repos/ai-dock/llama.cpp-cuda/releases/latest";
+  }
   const releaseData = await fetchJSON(apiURL);
   const assets = releaseData.assets;
   
@@ -162,7 +180,10 @@ export async function getLlamaCppAssets(hw) {
     }
   } else {
     // Linux
-    if (hw.gpuBackend === 'vulkan') {
+    if (hw.gpuBackend === 'cuda') {
+      const suffix = hw.arch === 'arm64' ? 'arm64.tar.gz' : 'amd64.tar.gz';
+      primaryAsset = assets.find(a => a.name.includes('-cuda-') && a.name.endsWith(suffix));
+    } else if (hw.gpuBackend === 'vulkan') {
       primaryAsset = assets.find(a => a.name.startsWith('llama-') && a.name.includes('bin-ubuntu-vulkan') && a.name.includes('x64') && a.name.endsWith('.tar.gz'));
     } else if (hw.gpuBackend === 'rocm') {
       primaryAsset = assets.find(a => a.name.startsWith('llama-') && a.name.includes('bin-ubuntu-rocm') && a.name.includes('x64') && a.name.endsWith('.tar.gz'));
