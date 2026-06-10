@@ -177,7 +177,9 @@ export async function startLlamaBackend(context) {
   const hw = detectHardware();
   console.log(`[Hardware] Detected: OS=${hw.os}, Arch=${hw.arch}, GPU=${hw.gpuBackend} (${hw.gpuName})`);
 
-  const llamaDir = path.join(binDir, 'llama');
+  const llamaDir = process.platform === 'win32'
+    ? path.join(binDir, 'llama')
+    : path.join(binDir, `llama-${hw.os}-${hw.arch}`);
   const exeName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server';
   let llamaExePath = findExecutable(llamaDir, exeName);
 

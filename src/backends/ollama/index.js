@@ -23,7 +23,12 @@ function findExecutableUnder(dir) {
 }
 
 function findOllamaExecutable(binDir) {
-  const bundled = findExecutableUnder(path.join(binDir, 'ollama'));
+  const osName = process.platform === 'win32' ? 'win' : (process.platform === 'darwin' ? 'macos' : 'linux');
+  const archName = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const ollamaDir = process.platform === 'win32'
+    ? path.join(binDir, 'ollama')
+    : path.join(binDir, `ollama-${osName}-${archName}`);
+  const bundled = findExecutableUnder(ollamaDir);
   if (bundled) return bundled;
   return '';
 }
@@ -45,7 +50,11 @@ async function ensureOllamaExecutable(binDir) {
   const existing = findOllamaExecutable(binDir);
   if (existing) return existing;
 
-  const ollamaDir = path.join(binDir, 'ollama');
+  const osName = process.platform === 'win32' ? 'win' : (process.platform === 'darwin' ? 'macos' : 'linux');
+  const archName = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const ollamaDir = process.platform === 'win32'
+    ? path.join(binDir, 'ollama')
+    : path.join(binDir, `ollama-${osName}-${archName}`);
   fs.mkdirSync(ollamaDir, { recursive: true });
 
   const assetName = getOllamaAssetName();

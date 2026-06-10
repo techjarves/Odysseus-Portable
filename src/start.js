@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawn, execSync } from 'child_process';
@@ -675,17 +676,21 @@ async function setupUnixPython(odysseusDir) {
 
   const oBinDir = path.join(odysseusDir, 'bin');
   fs.mkdirSync(oBinDir, { recursive: true });
-  const uvPath = path.join(oBinDir, 'uv');
+  
+  const uvOS = platform === 'darwin' ? 'macos' : 'linux';
+  const uvArch = arch === 'arm64' || arch === 'aarch64' ? 'arm64' : 'x64';
+  const uvPlatformSpecificPath = path.join(oBinDir, `uv-${uvOS}-${uvArch}`);
+  const canonicalUvPath = path.join(oBinDir, 'uv');
 
-  if (!fs.existsSync(uvPath)) {
+  if (!fs.existsSync(uvPlatformSpecificPath)) {
     console.log(`[Python/UV] Downloading portable UV binary for ${platform} (${arch})...`);
-    const uvTarPath = path.join(oBinDir, 'uv.tar.gz');
+    const uvTarPath = path.join(oBinDir, `uv-${uvOS}-${uvArch}.tar.gz`);
     await downloadFile(uvUrl, uvTarPath, (downloaded, total) => {
       printProgressBar(downloaded, total, 'Downloading UV: ');
     });
 
     console.log('[Python/UV] Extracting UV binary...');
-    const tempExtractDir = path.join(oBinDir, 'uv_temp');
+    const tempExtractDir = path.join(oBinDir, `uv_temp_${uvOS}_${uvArch}`);
     fs.mkdirSync(tempExtractDir, { recursive: true });
     extractArchive(uvTarPath, tempExtractDir);
 
@@ -696,8 +701,8 @@ async function setupUnixPython(odysseusDir) {
         if (fs.statSync(fullPath).isDirectory()) {
           findAndCopyUv(fullPath);
         } else if (file === 'uv') {
-          fs.copyFileSync(fullPath, uvPath);
-          fs.chmodSync(uvPath, 0o755);
+          fs.copyFileSync(fullPath, uvPlatformSpecificPath);
+          fs.chmodSync(uvPlatformSpecificPath, 0o755);
         }
       }
     };
@@ -706,12 +711,25 @@ async function setupUnixPython(odysseusDir) {
     fs.unlinkSync(uvTarPath);
   }
 
-  const envDir = path.join(odysseusDir, 'envs', envName);
+  // Re-link or copy the platform-specific uv to the canonical uv path
+  try {
+    if (fs.existsSync(canonicalUvPath)) {
+      fs.rmSync(canonicalUvPath, { force: true });
+    }
+    fs.copyFileSync(uvPlatformSpecificPath, canonicalUvPath);
+    fs.chmodSync(canonicalUvPath, 0o755);
+    console.log(`[Python/UV] Activated UV binary for ${uvOS}-${uvArch}`);
+  } catch (err) {
+    console.warn(`[Python/UV Warning] Failed to activate UV binary at ${canonicalUvPath}: ${err.message}`);
+  }
+
+  const envDir = path.join(os.homedir(), '.cache', 'odysseus-portable', 'envs', envName);
   const pythonPath = path.join(envDir, 'bin', 'python');
 
   if (!fs.existsSync(envDir)) {
-    console.log(`[Python/UV] Creating virtual environment at envs/${envName}...`);
-    execFileSync(uvPath, ['venv', envDir, '--python', '3.12', '--quiet'], { stdio: 'inherit' });
+    console.log(`[Python/UV] Creating virtual environment at ~/.cache/odysseus-portable/envs/${envName}...`);
+    fs.mkdirSync(path.dirname(envDir), { recursive: true });
+    execFileSync(canonicalUvPath, ['venv', envDir, '--python', '3.12', '--quiet'], { stdio: 'inherit' });
   }
 
   return pythonPath;
@@ -739,17 +757,21 @@ async function setupTmux(odysseusDir) {
 
   const oBinDir = path.join(odysseusDir, 'bin');
   fs.mkdirSync(oBinDir, { recursive: true });
-  const tmuxPath = path.join(oBinDir, 'tmux');
+  
+  const tmuxOS = platform === 'darwin' ? 'macos' : 'linux';
+  const tmuxArch = arch === 'arm64' || arch === 'aarch64' ? 'arm64' : 'x64';
+  const tmuxPlatformSpecificPath = path.join(oBinDir, `tmux-${tmuxOS}-${tmuxArch}`);
+  const canonicalTmuxPath = path.join(oBinDir, 'tmux');
 
-  if (!fs.existsSync(tmuxPath)) {
+  if (!fs.existsSync(tmuxPlatformSpecificPath)) {
     console.log(`[Dependencies] Downloading portable tmux binary for ${platform} (${arch})...`);
-    const tmuxTarPath = path.join(oBinDir, 'tmux.tar.gz');
+    const tmuxTarPath = path.join(oBinDir, `tmux-${tmuxOS}-${tmuxArch}.tar.gz`);
     await downloadFile(tmuxUrl, tmuxTarPath, (downloaded, total) => {
       printProgressBar(downloaded, total, 'Downloading tmux: ');
     });
 
     console.log('[Dependencies] Extracting tmux binary...');
-    const tempExtractDir = path.join(oBinDir, 'tmux_temp');
+    const tempExtractDir = path.join(oBinDir, `tmux_temp_${tmuxOS}_${tmuxArch}`);
     fs.mkdirSync(tempExtractDir, { recursive: true });
     extractArchive(tmuxTarPath, tempExtractDir);
 
@@ -760,11 +782,11 @@ async function setupTmux(odysseusDir) {
         if (fs.statSync(fullPath).isDirectory()) {
           findAndCopyTmux(fullPath);
         } else if (file === 'tmux') {
-          fs.copyFileSync(fullPath, tmuxPath);
-          fs.chmodSync(tmuxPath, 0o755);
+          fs.copyFileSync(fullPath, tmuxPlatformSpecificPath);
+          fs.chmodSync(tmuxPlatformSpecificPath, 0o755);
           if (platform === 'darwin') {
             try {
-              execSync(`xattr -r -d com.apple.quarantine "${tmuxPath}"`, { stdio: 'ignore' });
+              execSync(`xattr -r -d com.apple.quarantine "${tmuxPlatformSpecificPath}"`, { stdio: 'ignore' });
             } catch (e) {}
           }
         }
@@ -773,6 +795,18 @@ async function setupTmux(odysseusDir) {
     findAndCopyTmux(tempExtractDir);
     fs.rmSync(tempExtractDir, { recursive: true, force: true });
     fs.unlinkSync(tmuxTarPath);
+  }
+
+  // Re-link or copy the platform-specific tmux to the canonical tmux path
+  try {
+    if (fs.existsSync(canonicalTmuxPath)) {
+      fs.rmSync(canonicalTmuxPath, { force: true });
+    }
+    fs.copyFileSync(tmuxPlatformSpecificPath, canonicalTmuxPath);
+    fs.chmodSync(canonicalTmuxPath, 0o755);
+    console.log(`[Dependencies] Activated tmux binary for ${tmuxOS}-${tmuxArch}`);
+  } catch (err) {
+    console.warn(`[Dependencies Warning] Failed to activate tmux binary at ${canonicalTmuxPath}: ${err.message}`);
   }
 }
 
@@ -1045,7 +1079,10 @@ async function main() {
     ? await startOllamaBackend(backendContext)
     : await startLlamaBackend(backendContext);
 
-  const llamaExeDir = backend.llamaExeDir || path.join(binDir, 'llama');
+  const defaultLlamaDir = process.platform === 'win32'
+    ? path.join(binDir, 'llama')
+    : path.join(binDir, `llama-${process.platform === 'darwin' ? 'macos' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`);
+  const llamaExeDir = backend.llamaExeDir || defaultLlamaDir;
   const odysseusEnv = {
     ...process.env,
     ...(backend.env || {}),

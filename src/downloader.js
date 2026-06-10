@@ -2,6 +2,7 @@ import https from 'https';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { execFileSync } from 'child_process';
 import { URL } from 'url';
 
@@ -87,50 +88,97 @@ export function downloadFile(urlStr, destPath, progressCallback) {
   });
 }
 
-// Extract archive using native tools
+// Extract archive using native tools. Supports exFAT/FAT32 symlink dereferencing on Unix.
 export function extractArchive(archivePath, destDir) {
-  if (!fs.existsSync(destDir)) {
-    fs.mkdirSync(destDir, { recursive: true });
-  }
-  
-  const ext = path.extname(archivePath).toLowerCase();
   const isWindows = process.platform === 'win32';
   
-  if (isWindows && ext === '.zip') {
-    try {
-      execFileSync('tar.exe', ['-m', '-xf', archivePath, '-C', destDir], { stdio: 'inherit' });
-    } catch (tarErr) {
-      console.warn(`[Extract Warning] tar.exe could not extract ${path.basename(archivePath)}. Falling back to Expand-Archive.`);
-      try {
-        execFileSync('powershell.exe', [
-          '-NoProfile',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
-        ], {
-          stdio: 'inherit',
-          env: {
-            ...process.env,
-            ARCHIVE_PATH: archivePath,
-            DEST_DIR: destDir
-          }
-        });
-      } catch (powershellErr) {
-        powershellErr.message = `Failed to extract ${path.basename(archivePath)} with tar.exe or Expand-Archive. ${powershellErr.message}`;
-        throw powershellErr;
-      }
+  if (isWindows) {
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
     }
-  } else if (archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
-    execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit' });
-  } else if (archivePath.endsWith('.tar.xz')) {
-    execFileSync('tar', ['-xJf', archivePath, '-C', destDir], { stdio: 'inherit' });
-  } else if (archivePath.endsWith('.tar.zst')) {
-    execFileSync('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' });
-  } else if (ext === '.zip') {
-    execFileSync('unzip', ['-o', archivePath, '-d', destDir], { stdio: 'inherit' });
-  } else {
-    throw new Error(`Unsupported archive format for extraction: ${path.basename(archivePath)}`);
+    const ext = path.extname(archivePath).toLowerCase();
+    if (ext === '.zip') {
+      try {
+        execFileSync('tar.exe', ['-m', '-xf', archivePath, '-C', destDir], { stdio: 'inherit' });
+      } catch (tarErr) {
+        console.warn(`[Extract Warning] tar.exe could not extract ${path.basename(archivePath)}. Falling back to Expand-Archive.`);
+        try {
+          execFileSync('powershell.exe', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DEST_DIR -Force'
+          ], {
+            stdio: 'inherit',
+            env: {
+              ...process.env,
+              ARCHIVE_PATH: archivePath,
+              DEST_DIR: destDir
+            }
+          });
+        } catch (powershellErr) {
+          powershellErr.message = `Failed to extract ${path.basename(archivePath)} with tar.exe or Expand-Archive. ${powershellErr.message}`;
+          throw powershellErr;
+        }
+      }
+    } else {
+      throw new Error(`Unsupported archive format for extraction on Windows: ${path.basename(archivePath)}`);
+    }
+    return;
+  }
+
+  // Unix (Linux & macOS) logic:
+  // To support FAT32/exFAT drives (which do not support symbolic links),
+  // we extract the archive to the host's temporary local directory (~/.cache),
+  // resolve/dereference all symlinks by copying the actual target file,
+  // and then copy the resolved folder back to the destination path.
+  const tempDir = path.join(os.homedir(), '.cache', 'odysseus-portable', 'temp-extract', path.basename(archivePath));
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    const ext = path.extname(archivePath).toLowerCase();
+    if (archivePath.endsWith('.tar.gz') || archivePath.endsWith('.tgz')) {
+      execFileSync('tar', ['-xzf', archivePath, '-C', tempDir], { stdio: 'inherit' });
+    } else if (archivePath.endsWith('.tar.xz')) {
+      execFileSync('tar', ['-xJf', archivePath, '-C', tempDir], { stdio: 'inherit' });
+    } else if (archivePath.endsWith('.tar.zst')) {
+      execFileSync('tar', ['-xf', archivePath, '-C', tempDir], { stdio: 'inherit' });
+    } else if (ext === '.zip') {
+      execFileSync('unzip', ['-o', archivePath, '-d', tempDir], { stdio: 'inherit' });
+    } else {
+      throw new Error(`Unsupported archive format for extraction: ${path.basename(archivePath)}`);
+    }
+
+    // Resolve symbolic links recursively
+    const resolveSymlinks = (dir) => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) {
+          try {
+            const target = fs.readlinkSync(fullPath);
+            const absoluteTarget = path.resolve(dir, target);
+            fs.unlinkSync(fullPath);
+            if (fs.existsSync(absoluteTarget)) {
+              fs.copyFileSync(absoluteTarget, fullPath);
+              fs.chmodSync(fullPath, 0o755);
+            }
+          } catch (e) {
+            console.warn(`[Extract Warning] Failed to resolve symlink ${entry.name}: ${e.message}`);
+          }
+        } else if (entry.isDirectory()) {
+          resolveSymlinks(fullPath);
+        }
+      }
+    };
+    resolveSymlinks(tempDir);
+
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.cpSync(tempDir, destDir, { recursive: true });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
