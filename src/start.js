@@ -592,6 +592,30 @@ async function setupWindowsPython(odysseusDir) {
   const pythonDir = path.join(oBinDir, 'python');
   const pythonExe = path.join(pythonDir, 'python.exe');
 
+  const enableSitePackages = () => {
+    // Enable site-packages so installed packages are found
+    const pthFile = path.join(pythonDir, 'python312._pth');
+    if (fs.existsSync(pthFile)) {
+      let content = fs.readFileSync(pthFile, 'utf8');
+      if (content.includes('#import site')) {
+        content = content.replace('#import site', 'import site');
+        fs.writeFileSync(pthFile, content, 'utf8');
+      }
+    }
+  };
+
+  const installPip = async () => {
+    console.log('[Python] Fetching get-pip.py...');
+    const pipScriptPath = path.join(oBinDir, 'get-pip.py');
+    await downloadFile(pipUrl, pipScriptPath, (downloaded, total) => {
+      printProgressBar(downloaded, total, 'Downloading pip bootstrap: ');
+    });
+
+    console.log('[Python] Installing pip...');
+    execFileSync(pythonExe, [pipScriptPath, '--no-warn-script-location', '-q'], { stdio: 'inherit' });
+    fs.unlinkSync(pipScriptPath);
+  };
+
   if (fs.existsSync(pythonExe)) {
     console.log('[Python] Portable Python environment detected.');
     // Ensure python3.exe exists for Git Bash subshell compatibility
@@ -601,6 +625,23 @@ async function setupWindowsPython(odysseusDir) {
         fs.copyFileSync(pythonExe, python3Exe);
       } catch (e) {}
     }
+
+    // Ensure site-packages are enabled (could have been skipped if pre-existing python without setup)
+    enableSitePackages();
+
+    // Check if pip is functional
+    let pipOk = false;
+    try {
+      execFileSync(pythonExe, ['-m', 'pip', '--version'], { stdio: 'ignore' });
+      pipOk = true;
+    } catch (e) {
+      console.log('[Python] pip is missing or broken. Re-bootstrapping pip...');
+    }
+
+    if (!pipOk) {
+      await installPip();
+    }
+
     return pythonExe;
   }
 
@@ -617,24 +658,8 @@ async function setupWindowsPython(odysseusDir) {
   extractArchive(pyZipPath, pythonDir);
   fs.unlinkSync(pyZipPath);
 
-  // Enable site-packages so installed packages are found
-  const pthFile = path.join(pythonDir, 'python312._pth');
-  if (fs.existsSync(pthFile)) {
-    let content = fs.readFileSync(pthFile, 'utf8');
-    content = content.replace('#import site', 'import site');
-    fs.writeFileSync(pthFile, content, 'utf8');
-  }
-
-  // Bootstrap pip
-  console.log('[Python] Fetching get-pip.py...');
-  const pipScriptPath = path.join(oBinDir, 'get-pip.py');
-  await downloadFile(pipUrl, pipScriptPath, (downloaded, total) => {
-    printProgressBar(downloaded, total, 'Downloading pip bootstrap: ');
-  });
-
-  console.log('[Python] Installing pip...');
-  execFileSync(pythonExe, [pipScriptPath, '--no-warn-script-location', '-q'], { stdio: 'inherit' });
-  fs.unlinkSync(pipScriptPath);
+  enableSitePackages();
+  await installPip();
 
   // Mock venv module for HuggingFace library compatibility
   const venvDir = path.join(pythonDir, 'Lib', 'site-packages', 'venv');
