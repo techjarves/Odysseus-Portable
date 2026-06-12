@@ -953,15 +953,36 @@ async function main() {
   fs.mkdirSync(path.join(projectRoot, 'data'), { recursive: true });
   const runtimeTracker = createRuntimeTracker(projectRoot);
   runtimeTracker.cleanupPrevious();
-  runtimeTracker.cleanupOwnedPortProcesses([8080, 10086, 7070]);
-
-  for (const port of [8080, 10086, 7070]) {
-    if (await isPortOpen(port)) {
-      throw new Error(`Port ${port} is already in use by a process not tracked by this portable launcher. Close that process or change its port, then restart Odysseus Portable.`);
-    }
-  }
 
   const launcherConfig = loadLauncherConfig();
+  const baseWebPort = Number(process.env.ODYSSEUS_PORT || launcherConfig.webPort || 7070);
+  const baseProxyPort = Number(process.env.ODYSSEUS_PROXY_PORT || launcherConfig.proxyPort || 8080);
+  const baseLlamaPort = Number(process.env.ODYSSEUS_LLAMA_PORT || launcherConfig.llamaPort || 10086);
+
+  runtimeTracker.cleanupOwnedPortProcesses([baseProxyPort, baseLlamaPort, baseWebPort]);
+
+  async function findFreePort(startPort) {
+    let port = startPort;
+    while (await isPortOpen(port)) {
+      port++;
+    }
+    return port;
+  }
+
+  const webPort = await findFreePort(baseWebPort);
+  const proxyPort = await findFreePort(baseProxyPort);
+  const llamaPort = await findFreePort(baseLlamaPort);
+
+  if (webPort !== baseWebPort) {
+    console.log(`[Orchestrator] Port ${baseWebPort} is in use. Selected next free port: ${webPort}`);
+  }
+  if (proxyPort !== baseProxyPort) {
+    console.log(`[Orchestrator] Port ${baseProxyPort} is in use. Selected next free port: ${proxyPort}`);
+  }
+  if (llamaPort !== baseLlamaPort) {
+    console.log(`[Orchestrator] Port ${baseLlamaPort} is in use. Selected next free port: ${llamaPort}`);
+  }
+
   let backendChoice = getBackendChoice(launcherConfig);
 
   if (!backendChoice) {
@@ -1069,11 +1090,13 @@ async function main() {
     pythonExe,
     waitPort,
     isPortOpen,
-    launcherConfig: loadLauncherConfig(),
+    launcherConfig,
     saveLauncherConfig,
     combinedLogStream,
     combinedLogPath,
-    runtimeTracker
+    runtimeTracker,
+    proxyPort,
+    llamaPort
   };
   const backend = backendChoice === 'ollama'
     ? await startOllamaBackend(backendContext)
@@ -1092,7 +1115,7 @@ async function main() {
   const odysseusProcess = spawn(pythonExe, [
     '-m', 'uvicorn', 'app:app',
     '--host', '127.0.0.1',
-    '--port', '7070'
+    '--port', String(webPort)
   ], {
     cwd: odysseusDir,
     env: odysseusEnv,
@@ -1101,16 +1124,16 @@ async function main() {
 
   odysseusProcess.stdout.pipe(combinedLogStream, { end: false });
   odysseusProcess.stderr.pipe(combinedLogStream, { end: false });
-  runtimeTracker.register('odysseus-web', odysseusProcess, [7070]);
+  runtimeTracker.register('odysseus-web', odysseusProcess, [webPort]);
 
   // Step 12: Wait for Odysseus server to bind
   console.log('[Odysseus] Waiting for web application to start up...');
-  await waitPort(7070, 180000);
+  await waitPort(webPort, 180000);
   console.log('[Odysseus] Odysseus is ready and active.');
 
   // Step 13: Open browser window
-  console.log('[Odysseus] Launching http://127.0.0.1:7070 in your web browser...');
-  openBrowser('http://127.0.0.1:7070');
+  console.log(`[Odysseus] Launching http://127.0.0.1:${webPort} in your web browser...`);
+  openBrowser(`http://127.0.0.1:${webPort}`);
 
   console.log('\n=================================================================');
   console.log(' Odysseus Portable is running successfully!                      ');

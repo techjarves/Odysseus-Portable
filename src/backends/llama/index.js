@@ -172,7 +172,7 @@ function findExecutable(dir, exeName) {
 }
 
 export async function startLlamaBackend(context) {
-  const { binDir, logsDir, modelsDir, odysseusDir, projectRoot, pythonExe, waitPort } = context;
+  const { binDir, logsDir, modelsDir, odysseusDir, projectRoot, pythonExe, waitPort, proxyPort = 8080, llamaPort = 10086 } = context;
 
   const hw = detectHardware();
   console.log(`[Hardware] Detected: OS=${hw.os}, Arch=${hw.arch}, GPU=${hw.gpuBackend} (${hw.gpuName})`);
@@ -381,14 +381,18 @@ export async function startLlamaBackend(context) {
 
   seedPortableEndpoint(pythonExe, odysseusDir, {
     name: 'Odysseus Portable LLM',
-    baseUrl: 'http://127.0.0.1:8080/v1',
-    oldBaseUrls: ['http://localhost:8080/v1'],
+    baseUrl: `http://127.0.0.1:${proxyPort}/v1`,
+    oldBaseUrls: [
+      `http://localhost:${proxyPort}/v1`,
+      'http://localhost:8080/v1',
+      'http://127.0.0.1:8080/v1'
+    ],
     models: modelsToSeed,
     endpointKind: 'local',
     supportsTools: true
   });
 
-  console.log('\n[Inference] Starting llama-server on port 10086...');
+  console.log(`\n[Inference] Starting llama-server on port ${llamaPort}...`);
   let ngl = 0;
   if (hw.gpuBackend === 'cuda' || hw.gpuBackend === 'vulkan' || hw.gpuBackend === 'metal') {
     ngl = 99;
@@ -457,7 +461,7 @@ export async function startLlamaBackend(context) {
   const startRouter = async (ctxSize) => {
     currentlyLoadedModel = '';
     const proc = spawn(llamaExePath, [
-      '--port', '10086',
+      '--port', String(llamaPort),
       '--models-dir', modelsDir,
       '--models-max', '1',
       '--parallel', String(parallel),
@@ -470,7 +474,7 @@ export async function startLlamaBackend(context) {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     llamaProcess = proc;
-    context.runtimeTracker?.register('llama-server', proc, [10086]);
+    context.runtimeTracker?.register('llama-server', proc, [llamaPort]);
 
     proc.stdout.pipe(logStream, { end: false });
     proc.stderr.pipe(logStream, { end: false });
@@ -494,14 +498,14 @@ export async function startLlamaBackend(context) {
         handleLlamaLine(line);
       }
     });
-    await waitPort(10086);
+    await waitPort(llamaPort);
     return proc;
   };
 
   await startRouter(selectedContext.ctx);
 
   const router = {
-    port: 10086,
+    port: llamaPort,
     async retryLowerContext() {
       if (restarting || contextLadderIndex >= CONTEXT_LADDER.length - 1) return false;
       restarting = true;
@@ -525,7 +529,7 @@ export async function startLlamaBackend(context) {
     }
   };
 
-  const proxyServer = startProxy(8080, router, modelMapping);
+  const proxyServer = startProxy(proxyPort, router, modelMapping);
 
   console.log('[Inference] Waiting for llama-server to initialize...');
   console.log('[Inference] llama-server is ready and listening.');
