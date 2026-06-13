@@ -23,7 +23,7 @@ Odysseus Portable provides an offline-first AI agent interface that does not req
 > [!IMPORTANT]
 > **Data Portability Guarantee**: All user data, databases, config parameters, cached models, and secrets remain inside the project folder directory. Unplugging the USB drive leaves no configuration traces, files, or environment variables on the host system.
 
-### 🎥 Watch Video Demo
+### 🎥 Watch the Setup & Demo Video: https://youtu.be/iiM8Y5uzpJU
 
 [![Odysseus Portable AI Workspace Video Demo](https://img.youtube.com/vi/iiM8Y5uzpJU/maxresdefault.jpg)](https://youtu.be/iiM8Y5uzpJU)
 
@@ -136,14 +136,14 @@ HUGGING_FACE_HUB_TOKEN=hf_yourPlaceholderReadTokenHere
 
 ---
 
-## 🔄 Update Instructions
+##  Update Instructions
 
 - **Launcher updates**: Run `git pull` inside the `Odysseus-Portable` folder.
 - **Odysseus Web App updates**: The orchestrator checks the `./odysseus` git repository status on every launch and automatically pulls updates (`git pull --ff-only`) if it is connected to the internet.
 
 ---
 
-## 🛡️ Security Advisory
+##  Security Advisory
 
 - **Port Isolation**: By default, `llama-server` and the `Odysseus` web app bind to `127.0.0.1` (localhost). Do not bind these servers to `0.0.0.0` on untrusted networks, as it exposes your local inference API and SQLite database to anyone on your network.
 - **Admin Password**: Change the default admin password (`techjarves`) in the user profile settings after signing in.
